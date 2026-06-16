@@ -18,7 +18,7 @@ Le package ORM ne gere pas :
 - les migrations ;
 - le schema builder ;
 - les seeders ;
-- les commandes CLI.
+- les commandes CLI..
 
 Ces responsabilites restent dans `velt-database` et `veltphp-cli`.
 

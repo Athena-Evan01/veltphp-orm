@@ -33,11 +33,13 @@ abstract class Model implements JsonSerializable
      */
     public function __construct(array $attributes = [])
     {
+        // Le constructeur applique la protection mass assignment aux donnees utilisateur.
         $this->fill($attributes);
     }
 
     public static function find(int|string $id): ?static
     {
+        // find est un raccourci explicite autour de la primary key configuree du modele.
         return static::where(static::primaryKey(), $id)->first();
     }
 
@@ -56,6 +58,7 @@ abstract class Model implements JsonSerializable
 
     public static function query(): ModelQueryBuilder
     {
+        // Le builder ORM encapsule le query builder database et hydrate les resultats en objets.
         return new ModelQueryBuilder(static::class);
     }
 
@@ -75,7 +78,7 @@ abstract class Model implements JsonSerializable
      */
     public static function hydrate(array $attributes): static
     {
-        // Hydration restores database rows as-is; mass assignment rules only apply to user-provided input.
+        // L'hydratation restaure les lignes database telles quelles; fillable ne s'applique qu'aux entrees utilisateur.
         $model = new static();
         $model->attributes = $attributes;
         $model->original = $attributes;
@@ -108,7 +111,7 @@ abstract class Model implements JsonSerializable
                 throw new LogicException(sprintf('%s cannot be updated without primary key "%s".', static::class, $key));
             }
 
-            // Existing models only write changed attributes, keeping updates small and predictable.
+            // Les modeles existants n'ecrivent que les champs modifies.
             $dirty = $this->dirtyAttributes();
 
             if ($dirty === []) {
@@ -125,6 +128,7 @@ abstract class Model implements JsonSerializable
         $id = DB::connection()->lastInsertId();
 
         if ($id !== '0' && $id !== '') {
+            // Quand le driver expose un dernier id, on le reporte sur l'objet actif.
             $this->attributes[static::primaryKey()] = is_numeric($id) ? (int) $id : $id;
         }
 
@@ -214,6 +218,7 @@ abstract class Model implements JsonSerializable
         $localKey ??= static::primaryKey();
         $foreignKey ??= $this->foreignKey();
 
+        // hasMany cherche les lignes dont la foreign key pointe vers la key locale du modele courant.
         return $related::where($foreignKey, $this->getAttribute($localKey))->get();
     }
 
@@ -225,12 +230,13 @@ abstract class Model implements JsonSerializable
         $ownerKey ??= $related::primaryKey();
         $foreignKey ??= $this->foreignKeyFor($related);
 
+        // belongsTo remonte vers le parent via la foreign key stockee sur le modele courant.
         return $related::where($ownerKey, $this->getAttribute($foreignKey))->first();
     }
 
     protected function isFillable(string $key): bool
     {
-        // If a model declares fillable fields, only those fields can be mass assigned.
+        // Si fillable est defini, seuls ces champs peuvent etre assignes en masse.
         if (static::$fillable !== []) {
             return in_array($key, static::$fillable, true);
         }
@@ -251,6 +257,7 @@ abstract class Model implements JsonSerializable
             }
         }
 
+        // La primary key ne doit jamais etre modifiee par un update ORM.
         unset($dirty[static::primaryKey()]);
 
         return $dirty;
