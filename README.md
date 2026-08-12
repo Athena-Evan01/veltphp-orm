@@ -1,70 +1,136 @@
 # Velt ORM
 
-Active record ORM, relations and model layer for the Velt PHP framework.
+Velt ORM fournit la couche Active Record du framework Velt. Il transforme les lignes retournées par `velt/database` en objets métier persistables, expose une API de requête orientée modèle, prend en charge les relations essentielles et retourne des résultats paginés sérialisables.
 
-## Role
+Le package privilégie une surface réduite et lisible. Il ne réimplémente pas PDO, les migrations ou le compilateur SQL : ces responsabilités appartiennent à [`velt/database`](https://github.com/Velt-PHP/velt-database).
 
-This package starts in Module 3. It builds on `veltphp/database` and exposes the expressive model API used by applications:
+> Statut : préversion. L’API de base est opérationnelle, mais les relations avancées, les casts, les événements et les garanties de performance doivent être stabilisés avant `1.0`.
 
-```php
-User::find(1);
-User::where('email', $email)->first();
-$user->save();
+## Installation
+
+```bash
+composer require velt/orm
 ```
 
-## Scope
+Prérequis : PHP 8.2 ou supérieur, `ext-pdo`, une connexion configurée par `velt/database` et le pilote PDO correspondant à la base utilisée.
 
-- Active record base model.
-- Object hydration and persistence.
-- Minimal mass assignment protection.
-- Relations such as `hasMany` and `belongsTo`.
-- Pagination result objects.
-
-## Boundaries
-
-- SQL primitives, query builder, schema builder, migrations and seeders start in `veltphp/database`.
-- CLI commands for migrations and seeders live in `veltphp/cli`.
-- Package assembly and compatibility documentation live in `veltphp/framework`.
-
-## Module 3 Issues
-
-- Issue 01: create the active model layer.
-- Issue 02: add relations and pagination.
-
-## Current API
+## Premier modèle
 
 ```php
+<?php
+
+namespace App\Users\Models;
+
 use Velt\Orm\Model;
 
 final class User extends Model
 {
     protected static string $table = 'users';
 
-    protected static array $fillable = ['name', 'email'];
+    protected static array $fillable = [
+        'name',
+        'email',
+    ];
 }
-
-$user = User::find(1);
-$user = User::where('email', $email)->first();
-
-$user = new User(['name' => 'Ada', 'email' => 'ada@example.com']);
-$user->save();
-
-$user->name = 'Ada Lovelace';
-$user->save();
-
-$user->delete();
 ```
 
-## Active Model Features
+```php
+$user = User::find(1);
+$users = User::all();
+$active = User::where('active', true)->get();
 
-- Object hydration from database rows.
-- `find`, `all`, `where`, `create`.
-- Instance `save` for insert/update.
-- Instance `delete`.
-- Magic attribute access with `$user->name`.
-- Minimal mass assignment protection via `$fillable` and `$guarded`.
+$ada = User::create([
+    'name' => 'Ada Lovelace',
+    'email' => 'ada@example.com',
+]);
+
+$ada->name = 'Ada';
+$ada->save();
+$ada->delete();
+```
+
+## Responsabilités et frontières
+
+| Couche | Responsabilité |
+| --- | --- |
+| `velt/database` | connexions PDO, requêtes préparées, query builder, schéma, migrations, seeders |
+| `velt/orm` | hydratation, identité du modèle, persistance, relations, pagination |
+| `velt/cli` | génération de modèles et commandes de migration |
+| application | règles métier, validation d’entrée, autorisation et transactions métier |
+
+L’ORM ne doit jamais accéder directement aux variables globales HTTP, générer des réponses ou prendre une décision d’autorisation.
+
+## Lecture des données
+
+### Recherche par clé primaire
+
+```php
+$user = User::find(42);
+
+if ($user === null) {
+    // Le modèle n’existe pas.
+}
+```
+
+### Requête par attribut
+
+```php
+$user = User::where('email', 'ada@example.com')->first();
+
+$users = User::query()
+    ->where('active', 1)
+    ->orderBy('created_at', 'desc')
+    ->limit(25)
+    ->get();
+```
+
+`ModelQueryBuilder` adapte le query builder de la couche Database et hydrate chaque résultat dans la classe de modèle appelée.
+
+## Création et mise à jour
+
+```php
+$user = new User([
+    'name' => 'Grace Hopper',
+    'email' => 'grace@example.com',
+]);
+
+$user->save();
+
+$user->name = 'Rear Admiral Grace Hopper';
+$user->save();
+```
+
+Lors du premier `save()`, l’ORM insère le modèle. Lorsque sa clé primaire est connue, il met à jour la ligne correspondante. L’application doit entourer les opérations multiples d’une transaction fournie par la couche Database.
+
+## Protection des attributs
+
+```php
+final class User extends Model
+{
+    protected static string $table = 'users';
+
+    protected static array $fillable = ['name', 'email'];
+
+    protected static array $guarded = ['id', 'is_admin'];
+}
+```
+
+La protection de masse est une barrière de programmation, pas une politique d’autorisation. Le fait qu’un attribut soit remplissable ne signifie jamais que l’utilisateur courant a le droit de le modifier. Les payloads entrants doivent être validés et autorisés avant de parvenir au modèle.
+
+## Attributs et sérialisation
+
+Les attributs hydratés sont accessibles avec la syntaxe de propriété :
+
+```php
+echo $user->name;
+$user->email = 'new@example.com';
+```
+
+Pour une API, sérialisez uniquement les champs que le contrat public autorise. Ne retournez pas mécaniquement tous les attributs d’une table contenant mots de passe, jetons ou informations personnelles.
 
 ## Relations
+
+### Relation un-à-plusieurs
 
 ```php
 final class User extends Model
@@ -76,27 +142,35 @@ final class User extends Model
         return $this->hasMany(Post::class, 'user_id');
     }
 }
+```
 
+### Relation inverse
+
+```php
 final class Post extends Model
 {
     protected static string $table = 'posts';
 
-    public function user(): ?Model
+    public function author(): ?Model
     {
         return $this->belongsTo(User::class, 'user_id');
     }
 }
 ```
 
+Les relations actuelles sont chargées explicitement. Pour éviter le problème N+1, mesurez le nombre de requêtes et utilisez une requête adaptée lorsque vous parcourez une collection importante. Le chargement anticipé et les relations plusieurs-à-plusieurs font partie des travaux restant à stabiliser.
+
 ## Pagination
 
 ```php
-$page = User::query()->orderBy('id')->paginate(page: 1, perPage: 15);
+$page = User::query()
+    ->orderBy('id')
+    ->paginate(page: 1, perPage: 15);
 
-$page->toArray();
+$payload = $page->toArray();
 ```
 
-Serialized shape:
+Forme sérialisée :
 
 ```php
 [
@@ -107,12 +181,114 @@ Serialized shape:
 ]
 ```
 
-## Testing
+L’application doit imposer une limite maximale à `perPage` lorsqu’elle accepte ce paramètre depuis une requête publique.
 
-The ORM tests reuse the PHPUnit installation from `velt-database` in this local workspace:
+## Architecture interne
 
-```powershell
-..\velt-database\vendor\bin\phpunit.bat --colors=always --testdox
+```text
+src/
+  Model.php                    cycle de vie Active Record
+  ModelQueryBuilder.php        requêtes et hydratation typée
+  Pagination/
+    Paginator.php              résultat paginé sérialisable
 ```
 
-The SQLite integration tests require `pdo_sqlite`. If the extension is not installed, those tests are skipped.
+Le flux principal est :
+
+```text
+Model::query()
+    -> QueryBuilder de velt/database
+    -> PDO avec paramètres liés
+    -> ligne associative
+    -> hydratation Model
+    -> objet ou collection applicative
+```
+
+Les détails sont présentés dans [`docs/orm-architecture.md`](docs/orm-architecture.md).
+
+## Configuration de la connexion
+
+L’ORM utilise la connexion active de `velt/database`. Dans une application Velt standard, le provider Database initialise cette connexion depuis la configuration :
+
+```env
+DB_CONNECTION=sqlite
+DB_DATABASE=database/database.sqlite
+```
+
+Pour MySQL ou PostgreSQL, installez l’extension PDO appropriée et utilisez les variables d’environnement du skeleton. Les secrets ne doivent pas être committés dans `.env.example` ou dans les fixtures.
+
+## Transactions
+
+Une opération métier qui écrit plusieurs modèles doit rester atomique :
+
+```php
+DB::transaction(function () use ($payload): void {
+    $user = User::create($payload['user']);
+    Profile::create(['user_id' => $user->id] + $payload['profile']);
+});
+```
+
+Si la méthode transactionnelle n’est pas disponible dans la version de `velt/database` installée, utilisez explicitement la connexion PDO. Une future API ne doit pas simuler l’atomicité en masquant une absence de transaction.
+
+## Erreurs et observabilité
+
+- une erreur SQL reste une exception et ne doit pas être convertie silencieusement en liste vide ;
+- les logs peuvent inclure la durée et le nom logique de la requête, jamais les secrets liés ;
+- une recherche sans résultat retourne `null` lorsque l’API le documente ;
+- la couche HTTP décide ensuite de produire un `404`, pas l’ORM ;
+- les erreurs de schéma doivent être visibles pendant le développement.
+
+## Tests
+
+```bash
+composer install
+composer validate --strict
+composer test
+```
+
+La suite SQLite nécessite `pdo_sqlite`. Un test ignoré faute d’extension n’est pas une validation de cette base : la CI de release doit disposer du pilote et exécuter réellement le scénario.
+
+La matrice cible couvre :
+
+- PHP 8.2, 8.3 et 8.4 ;
+- création, lecture, mise à jour et suppression ;
+- valeurs nulles, booléens, dates et identifiants ;
+- protection `fillable`/`guarded` ;
+- relations avec résultat vide ou clé absente ;
+- pagination aux bornes ;
+- rollback transactionnel ;
+- SQLite, MySQL et PostgreSQL dans les tests d’intégration.
+
+## Performance
+
+Active Record privilégie la commodité. Pour des imports massifs ou agrégations complexes, le query builder de `velt/database` est souvent plus approprié. Toute optimisation doit être étayée par un benchmark reproductible et conserver les requêtes préparées.
+
+## Sécurité
+
+- ne concaténez jamais une valeur utilisateur dans un fragment SQL ;
+- validez les identifiants dynamiques avec les primitives Database ;
+- appliquez validation et autorisation avant l’affectation ;
+- masquez les attributs sensibles dans les ressources API ;
+- utilisez un compte de base de données aux privilèges minimaux ;
+- signalez une vulnérabilité sans publier immédiatement un exploit.
+
+## Compatibilité et versionnement
+
+Le package suit SemVer. Avant `1.0`, toute préversion peut encore ajuster son API, mais un tag publié doit rester reproductible. `velt/framework` documente la combinaison de versions supportée entre Kernel, Database, ORM et Skeleton.
+
+## Limites avant une version stable
+
+- casts typés et dates non finalisés ;
+- événements de modèle et observers absents ;
+- eager loading et prévention automatique du N+1 absents ;
+- relations many-to-many non stabilisées ;
+- stratégie de sérialisation sensible à formaliser ;
+- matrice MySQL/PostgreSQL à automatiser en CI.
+
+## Contribution
+
+Toute modification doit inclure un test de régression et préserver la séparation avec `velt/database`. Pour un changement public, documentez l’exemple, l’exception attendue, l’impact de compatibilité et la migration nécessaire. Les travaux planifiés sont suivis par les issues et milestones du dépôt.
+
+## Licence
+
+Velt ORM est distribué sous licence MIT.
